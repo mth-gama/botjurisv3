@@ -11,6 +11,7 @@ import redis
 from app.core.logger_config import get_logger
 from app.core.distributed_lock import DistributedLock, get_redis_client
 from app.service.process import process_webhook_data  # garante que esse nome está correto
+from app.service.internal_queue import get_internal_queue
 
 
 log = get_logger()
@@ -31,13 +32,21 @@ MAX_BACKOFF_SECONDS = 30  # limite do backoff exponencial
 _redis_client: Optional[redis.Redis] = None
 _stop_event = threading.Event()
 _worker_thread: Optional[threading.Thread] = None
+_use_internal_queue = False  # Flag para indicar uso da fila interna
 
 
 def get_redis() -> redis.Redis:
     """Retorna client Redis, com tentativa de reconexão simples."""
-    global _redis_client
+    global _redis_client, _use_internal_queue
     if _redis_client is None:
-        _redis_client = get_redis_client()
+        try:
+            _redis_client = get_redis_client()
+            _use_internal_queue = False
+            log.info("✅ Redis conectado com sucesso")
+        except Exception as e:
+            log.error(f"❌ Falha ao conectar ao Redis: {e}. Usando fila interna como fallback.")
+            _use_internal_queue = True
+            _redis_client = None
     return _redis_client
 
 
@@ -158,7 +167,7 @@ def run_with_timeout(
 
 def enqueue_webhook(payload: Dict[str, Any]) -> None:
     """
-    Enfileira um payload de webhook no Redis para processamento assíncrono.
+    Enfileira um payload de webhook no Redis ou fila interna para processamento assíncrono.
 
     Wrap de mensagem:
     {
@@ -166,14 +175,29 @@ def enqueue_webhook(payload: Dict[str, Any]) -> None:
         "retry": 0
     }
     """
-    client = get_redis()
+    global _use_internal_queue
+    
     wrapper = {
         "payload": payload,
         "retry": 0,
     }
-    raw = json.dumps(wrapper, ensure_ascii=False)
-    client.lpush(QUEUE_KEY, raw)
-    log.debug("📥 Payload enfileirado na queue de webhooks")
+    
+    try:
+        client = get_redis()
+        if client and not _use_internal_queue:
+            raw = json.dumps(wrapper, ensure_ascii=False)
+            client.lpush(QUEUE_KEY, raw)
+            log.debug("📥 Payload enfileirado na queue de webhooks (Redis)")
+        else:
+            # Fallback para fila interna
+            internal_queue = get_internal_queue(QUEUE_KEY)
+            internal_queue.lpush(wrapper)
+            log.debug("📥 Payload enfileirado na queue de webhooks (Fila Interna)")
+    except Exception as e:
+        log.error(f"❌ Falha ao enfileirar no Redis: {e}. Usando fila interna como fallback.")
+        _use_internal_queue = True
+        internal_queue = get_internal_queue(QUEUE_KEY)
+        internal_queue.lpush(wrapper)
     
 
 
@@ -196,7 +220,8 @@ def _handle_failure(wrapper: Dict[str, Any], error: Exception) -> None:
       - Aplica backoff exponencial
       - Reenfileira ou envia para DLQ
     """
-    client = get_redis()
+    global _use_internal_queue
+    
     retry = wrapper.get("retry", 0)
     retry += 1
     wrapper["retry"] = retry
@@ -206,7 +231,25 @@ def _handle_failure(wrapper: Dict[str, Any], error: Exception) -> None:
 
     if retry > MAX_RETRIES:
         # Envia para DLQ
-        client.lpush(QUEUE_DLQ_KEY, json.dumps(wrapper, ensure_ascii=False))
+        try:
+            if not _use_internal_queue:
+                client = get_redis()
+                if client:
+                    client.lpush(QUEUE_DLQ_KEY, json.dumps(wrapper, ensure_ascii=False))
+                else:
+                    _use_internal_queue = True
+                    internal_queue = get_internal_queue(QUEUE_KEY)
+                    internal_queue.add_to_dlq(wrapper, str(error))
+            else:
+                internal_queue = get_internal_queue(QUEUE_KEY)
+                internal_queue.add_to_dlq(wrapper, str(error))
+        except Exception as e:
+            log.error(f"❌ Falha ao enviar para DLQ: {e}")
+            # Fallback final para fila interna
+            _use_internal_queue = True
+            internal_queue = get_internal_queue(QUEUE_KEY)
+            internal_queue.add_to_dlq(wrapper, str(error))
+        
         log.error(
             f"☠ Mensagem enviada para DLQ após {retry - 1} tentativas. "
             f"lead_phone={lead_phone}, erro={error}"
@@ -223,7 +266,24 @@ def _handle_failure(wrapper: Dict[str, Any], error: Exception) -> None:
     # Espera antes de reenfileirar (simples, mas efetivo)
     time.sleep(backoff)
 
-    client.lpush(QUEUE_KEY, json.dumps(wrapper, ensure_ascii=False))
+    try:
+        if not _use_internal_queue:
+            client = get_redis()
+            if client:
+                client.lpush(QUEUE_KEY, json.dumps(wrapper, ensure_ascii=False))
+            else:
+                _use_internal_queue = True
+                internal_queue = get_internal_queue(QUEUE_KEY)
+                internal_queue.lpush(wrapper)
+        else:
+            internal_queue = get_internal_queue(QUEUE_KEY)
+            internal_queue.lpush(wrapper)
+    except Exception as e:
+        log.error(f"❌ Falha ao reenfileirar: {e}")
+        # Fallback final para fila interna
+        _use_internal_queue = True
+        internal_queue = get_internal_queue(QUEUE_KEY)
+        internal_queue.lpush(wrapper)
 
 
 def _process_item(raw: str) -> None:
@@ -264,34 +324,72 @@ def _process_item(raw: str) -> None:
 def worker_loop() -> None:
     """
     Loop principal do worker:
-      - Consome itens da fila Redis (BRPOP)
+      - Consome itens da fila Redis ou interna (BRPOP)
       - Processa com segurança
       - Respeita graceful shutdown via _stop_event
+      - Suporta fallback automático entre Redis e fila interna
     """
+    global _use_internal_queue
+    
     log.info("🚀 Worker de queue iniciado")
 
     while not _stop_event.is_set():
         try:
-            client = get_redis()
-            item = client.brpop(QUEUE_KEY, timeout=5)  # (queue, value)
-
-            if item is None:
-                # timeout do BRPOP — volta pro loop, checa se deve encerrar
-                continue
-
-            _, raw = item
+            if not _use_internal_queue:
+                # Tenta consumir do Redis primeiro
+                try:
+                    client = get_redis()
+                    if client:
+                        item = client.brpop(QUEUE_KEY, timeout=5)  # (queue, value)
+                        if item:
+                            _, raw = item
+                            try:
+                                _process_item(raw)
+                            except Exception as ex:
+                                log.error(f"❌ Erro inesperado ao processar item da fila Redis: {ex}", exc_info=True)
+                        continue
+                    else:
+                        _use_internal_queue = True
+                        log.warning("⚠️ Redis indisponível, mudando para fila interna")
+                except (redis.ConnectionError, redis.TimeoutError) as ex:
+                    log.error(f"🔌 Erro de conexão com Redis: {ex}. Mudando para fila interna.")
+                    _use_internal_queue = True
+                    time.sleep(REDIS_RECONNECT_DELAY)
+                    continue
+                except Exception as ex:
+                    log.error(f"❌ Erro ao consumir do Redis: {ex}. Mudando para fila interna.")
+                    _use_internal_queue = True
+                    continue
+            
+            # Consumir da fila interna (fallback)
             try:
-                _process_item(raw)
+                internal_queue = get_internal_queue(QUEUE_KEY)
+                item = internal_queue.brpop(timeout=5)
+                
+                if item:
+                    _, raw = item
+                    try:
+                        _process_item(raw)
+                    except Exception as ex:
+                        log.error(f"❌ Erro inesperado ao processar item da fila interna: {ex}", exc_info=True)
+                
+                # Tenta reconectar ao Redis periodicamente
+                if _use_internal_queue:
+                    try:
+                        _redis_client = get_redis_client()
+                        if _redis_client:
+                            _use_internal_queue = False
+                            log.info("🟢 Redis reconectado com sucesso! Voltando ao uso normal.")
+                    except:
+                        pass  # Mantém fallback
+                        
             except Exception as ex:
-                # Em princípio, qualquer erro tratado dentro de _process_item
-                # não deveria chegar aqui, mas mantemos como fallback.
-                log.error(f"❌ Erro inesperado ao processar item da fila: {ex}", exc_info=True)
+                log.error(f"❌ Erro ao consumir da fila interna: {ex}")
+                time.sleep(1)  # Espera maior em caso de erro na fila interna
 
-        except (redis.ConnectionError, redis.TimeoutError) as ex:
-            log.error(f"🔌 Erro de conexão com Redis: {ex}")
-            time.sleep(REDIS_RECONNECT_DELAY)
         except Exception as ex:
             log.error(f"❌ Erro inesperado no worker_loop: {ex}", exc_info=True)
+            time.sleep(1)
 
     log.info("🛑 Worker de queue finalizado (graceful shutdown concluído)")
 
@@ -335,3 +433,31 @@ def stop_worker() -> None:
         _worker_thread.join(timeout=10)
 
     log.info("✅ Worker finalizado.")
+
+
+def get_queue_stats() -> Dict[str, Any]:
+    """
+    Retorna estatísticas das filas (Redis e interna).
+    """
+    global _use_internal_queue
+    
+    stats = {
+        "using_internal_queue": _use_internal_queue,
+        "redis_connected": False,
+        "internal_queue_stats": None
+    }
+    
+    try:
+        client = get_redis()
+        if client:
+            stats["redis_connected"] = True
+            stats["redis_queue_size"] = client.llen(QUEUE_KEY)
+            stats["redis_dlq_size"] = client.llen(QUEUE_DLQ_KEY)
+    except:
+        pass
+    
+    # Sempre inclui stats da fila interna
+    internal_queue = get_internal_queue(QUEUE_KEY)
+    stats["internal_queue_stats"] = internal_queue.get_stats()
+    
+    return stats

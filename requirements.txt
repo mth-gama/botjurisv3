@@ -43,6 +43,8 @@ murmurhash==1.0.12
 numpy==2.2.3
 openai==1.63.2
 orjson==3.10.15
+redis
+loguru
 packaging==24.2
 preshed==3.0.9
 propcache==0.3.0

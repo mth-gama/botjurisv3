@@ -5,6 +5,9 @@
 
 venv
 venv/
+
+venv2
+venv2/
 # LOGS
 logs/
 *.log
