@@ -174,6 +174,7 @@ def enqueue_webhook(payload: Dict[str, Any]) -> None:
     raw = json.dumps(wrapper, ensure_ascii=False)
     client.lpush(QUEUE_KEY, raw)
     log.debug("📥 Payload enfileirado na queue de webhooks")
+    
 
 
 def _extract_lead_phone(payload: Dict[str, Any]) -> Optional[str]:
