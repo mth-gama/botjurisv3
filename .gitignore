@@ -3,6 +3,8 @@
 .env.*
 *.env
 
+venv
+venv/
 # LOGS
 logs/
 *.log
