@@ -30,6 +30,15 @@ def encrypt_data(data: dict) -> str:
 
 # 🔓 Desencripta a string e retorna o dicionário original
 def decrypt_data(encrypted_str: str) -> dict:
+
+    print(type(encrypted_str))
+    if isinstance(encrypted_str, dict):
+        print("Variavel ja esta decriptada seguindo o baile")
+        return encrypted_str
+    elif isinstance(encrypted_str, str) and "provider" in encrypted_str:
+        print("Variavel ja decriptada mas em string")
+        return json.loads(encrypted_str)
+    
     try:
         decrypted_bytes = fernet.decrypt(encrypted_str.encode())
         data_json = json.loads(decrypted_bytes.decode())

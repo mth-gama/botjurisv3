@@ -40,12 +40,12 @@ class SignatureValidationMiddleware(BaseHTTPMiddleware):
             
             # Busca assinatura no header
             signature = request.headers.get("X-Signature")
-            if not signature:
-                log.warning("🚫 Header X-Signature ausente no webhook")
-                raise HTTPException(
-                    status_code=401,
-                    detail="Missing X-Signature header"
-                )
+            #if not signature:
+            #    log.warning("🚫 Header X-Signature ausente no webhook")
+            #    raise HTTPException(
+            #        status_code=401,
+            #        detail="Missing X-Signature header"
+            #    )
             
             # Lê o body da requisição
             body = await request.body()

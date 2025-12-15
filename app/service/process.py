@@ -1,5 +1,6 @@
-import json
+import pysnooper
 from typing import Any, Dict
+from pydantic import ValidationError
 
 from app.apis.evolution import send_message
 from app.core.distributed_lock import DistributedLock
@@ -23,14 +24,26 @@ def process_webhook_data(data: Dict[str, Any]) -> None:
     """
 
     log.info("📩 Webhook recebido do Evolution")
-    log.debug(json.dumps(data, indent=2, ensure_ascii=False, default=str))
+    #log.debug(json.dumps(data, indent=2, ensure_ascii=False, default=str))
 
     try:
         # 1️⃣ Sanitizar o payload
         data = sanitize_dict(data)
+        
 
         # 2️⃣ Validar estrutura via Pydantic
-        payload = WebhookPayload(**data)
+        try:
+            
+            payload = WebhookPayload(**data)
+        except ValidationError as e:
+            print("❌ ValidationError")
+            print(e)
+            raise
+
+        except KeyError as e:
+            print("❌ KeyError DURANTE Pydantic:", e)
+            print("Data completa:", data)
+            raise
 
         ia_name = payload.instance
         ia_phone = payload.sender.split("@")[0]
@@ -59,15 +72,19 @@ def process_webhook_data(data: Dict[str, Any]) -> None:
             raise Exception(f"Conteúdo da mensagem não reconhecido: {message_type=}")
 
         lead_name = webhook_data.pushName or "Usuário"
-        lead_phone = webhook_data.key.remoteJid.split("@")[0]
+        lead_phone = webhook_data.key.remoteJidAlt.split("@")[0]
 
         log.info(f"👤 Lead: {lead_name} ({lead_phone})")
         log.info(f"💬 Mensagem recebida: {mensagem_texto}")
         # 5️⃣ Seção crítica protegida por lock distribuído (concorrência)
 
         lock_key = f"webhook_processing:{lead_phone}"
-        with DistributedLock(lock_key, timeout=30):
+    
+        with DistributedLock(name=lock_key, blocking_timeout=30, ttl=15):
             lead_db = _gerenciar_lead(lead_phone, lead_name, ia_infos, mensagem_texto)
+            if lead_db.bloqueado:
+                log.info(f"Lead esta bloqueado no banco de dados não irei responder: {mensagem_texto}")
+                return
 
             # 6️⃣ Resposta da IA
             resposta_ia, historico = _gerar_resposta_ia(
@@ -99,8 +116,6 @@ def process_webhook_data(data: Dict[str, Any]) -> None:
 # ===============================================================
 #  🔹 FUNÇÕES INTERNAS (organização e clareza)
 # ===============================================================
-
-
 def _processar_conteudo(
     data: Dict[str, Any],
     instance: str,
@@ -163,7 +178,6 @@ def _gerenciar_lead(lead_phone, lead_name, ia_infos, mensagem_texto):
         log.info(f"🆕 Novo lead criado: {lead_name} ({lead_phone})")
 
     return lead_db
-
 
 def _gerar_resposta_ia(ia_infos, mensagem_texto, historico, resumo):
     """Chama a IA e gera resposta."""

@@ -1,6 +1,6 @@
 # app/service/sanitize.py
 from typing import Any
-import pysnooper
+import json
 
 def sanitize_text(texto: str | None, max_len: int = 5000) -> str:
     """
@@ -31,28 +31,41 @@ def sanitize_text(texto: str | None, max_len: int = 5000) -> str:
 
     return texto
 
+
 def sanitize_dict(data: dict) -> dict:
+    """
+    Sanitiza recursivamente um dicionário.
+
+    Args:
+        data: Dicionário a ser sanitizado
+
+    Returns:
+        Dicionário sanitizado
+    """
     if not isinstance(data, dict):
         return data
 
-    sanitized: dict[str, Any] = {}
-
+    sanitized: dict[str, Any] = {}  # ✅ ÚNICA MUDANÇA AQUI
     for key, value in data.items():
         if isinstance(value, str):
             sanitized[key] = sanitize_text(value)
-
         elif isinstance(value, dict):
             sanitized[key] = sanitize_dict(value)
-
         elif isinstance(value, list):
             sanitized[key] = [
-                sanitize_dict(item) if isinstance(item, dict)
-                else sanitize_text(item) if isinstance(item, str)
-                else item
-                for item in value
+                sanitize_text(item) if isinstance(item, str) else item for item in value
             ]
-
         else:
             sanitized[key] = value
 
     return sanitized
+
+
+encrypted_str = {}
+print(type(encrypted_str))
+
+print(isinstance(encrypted_str, list))
+if isinstance(encrypted_str, dict):
+    print("é dicionario")
+
+encrypted_str = []

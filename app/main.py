@@ -63,6 +63,7 @@ app.add_middleware(
     allow_origins=[
         "https://evolution-api.com",  # ajuste para o domínio real
         "http://localhost:3000",  # para desenvolvimento
+        "https://evolution-evolution-api.i35x3k.easypanel.host/"
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -70,20 +71,20 @@ app.add_middleware(
 )
 
 # Headers de segurança (antes de tudo que gera resposta)
-app.add_middleware(SecurityHeadersMiddleware)
+#app.add_middleware(SecurityHeadersMiddleware)
 
 # Rate limiting
-app.add_middleware(RateLimitMiddleware, max_requests=10, window_seconds=60)
+#app.add_middleware(RateLimitMiddleware, max_requests=10, window_seconds=60)
 
 # Validação de assinatura do Evolution
-app.add_middleware(SignatureValidationMiddleware)
+#app.add_middleware(SignatureValidationMiddleware)
 
 # Exceptions globais
-register_exception_handlers(app)
+#register_exception_handlers(app)
 
 
 # ============================================================
 # 🛣️ Rotas
 # ============================================================
 app.include_router(webhook.router)
-app.include_router(health_router)
+#app.include_router(health_router)

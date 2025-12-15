@@ -1,11 +1,11 @@
 # app/service/queue_manager.py
 
-import json
+import json, pysnooper
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from typing import Any, Dict, Optional, Callable
-
+from ..core.logger_config import error_func
 import redis
 
 from app.core.logger_config import get_logger
@@ -207,7 +207,11 @@ def _extract_lead_phone(payload: Dict[str, Any]) -> Optional[str]:
     Ajuste esse caminho se a estrutura mudar.
     """
     try:
-        remote_jid = payload["data"]["key"]["remoteJid"]
+    
+        remote_jid = payload.get("data").get("key").get("remoteJidAlt", "user")
+        print("remote_jid")
+        print(remote_jid)
+        print("="*30)
         return remote_jid.split("@")[0]
     except Exception:
         return None
@@ -306,17 +310,19 @@ def _process_item(raw: str) -> None:
         process_webhook_data(payload)
 
     try:
+
         if lock_name:
-            # Lock distribuído por telefone
+            # Lock distribuído por telefone TTL = Time To Live
             client = get_redis()
-            with DistributedLock(client, lock_name, ttl=60, blocking_timeout=10):
+            with DistributedLock(lock_name, ttl=60, blocking_timeout=10):
                 circuit_breaker.call(run_with_timeout, _do_process, DEFAULT_TIMEOUT_SECONDS)
         else:
             # Sem telefone — processa mesmo assim, mas loga
-            log.warning("📵 Não foi possível extrair lead_phone para lock distribuído.")
+            print("📵 Não foi possível extrair lead_phone para lock distribuído.")
             circuit_breaker.call(run_with_timeout, _do_process, DEFAULT_TIMEOUT_SECONDS)
 
     except Exception as ex:
+        error_func(ex)
         # Falha no processamento da função (timeout, erro da IA, erro de regra, etc.)
         _handle_failure(wrapper, ex)
 

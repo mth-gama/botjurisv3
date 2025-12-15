@@ -62,6 +62,7 @@ class Lead(Base):
     phone = Column(String(20), unique=True, index=True)
     message = Column(MutableList.as_mutable(JSON), nullable=False)
     resume = Column(String)
+    bloqueado = Column(Boolean)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
     ia = relationship("IA", back_populates="leads", lazy="joined")

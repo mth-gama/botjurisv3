@@ -1,5 +1,6 @@
 # app/schemas/webhook.py
 from pydantic import Field, constr
+
 from typing import Optional, Dict, Any
 from .common import ApiBaseModel, Timestamped, MessageType, PHONE_REGEX
 
@@ -12,7 +13,7 @@ class WebhookMessage(ApiBaseModel):
 
 class WebhookKey(ApiBaseModel):
     id: constr(min_length=5)  # id precisa ter pelo menos 5 chars
-    remoteJid: constr(pattern=PHONE_REGEX)
+    remoteJidAlt: constr(pattern=PHONE_REGEX)
     fromMe: Optional[bool] = None
 
 class WebhookData(ApiBaseModel):

@@ -38,12 +38,11 @@ class DistributedLock(AbstractContextManager):
 
     def __init__(
         self,
-        redis_client: Optional[redis.Redis],
         name: str,
         ttl: int = 30,
         blocking_timeout: Optional[float] = 10.0,
     ) -> None:
-        self.redis = redis_client or get_redis_client()
+        self.redis = get_redis_client()
         self.name = name
         self.ttl = ttl
         self.blocking_timeout = blocking_timeout

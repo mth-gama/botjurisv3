@@ -10,14 +10,16 @@ log = get_logger()
 @router.post(
     "/webhook",
     status_code=status.HTTP_200_OK,
-    response_model=WebhookResponseDTO
+    #response_model=WebhookResponseDTO
 )
 async def receive_webhook(request: Request):
     """
     Recebe o payload do Evolution e o enfileira para processamento assíncrono.
     """
     try:
+        
         payload = await request.json()
+    
         job_id = enqueue_webhook(payload)
         if job_id:
             log.info(f"📬 Webhook enfileirado | job_id={job_id}")
