@@ -14,6 +14,7 @@ class WebhookMessage(ApiBaseModel):
 class WebhookKey(ApiBaseModel):
     id: constr(min_length=5)  # id precisa ter pelo menos 5 chars
     remoteJidAlt: constr(pattern=PHONE_REGEX)
+    remoteJid: Optional[str]
     fromMe: Optional[bool] = None
 
 class WebhookData(ApiBaseModel):

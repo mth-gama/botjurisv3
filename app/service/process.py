@@ -29,7 +29,6 @@ def process_webhook_data(data: Dict[str, Any]) -> None:
     try:
         # 1️⃣ Sanitizar o payload
         data = sanitize_dict(data)
-        
 
         # 2️⃣ Validar estrutura via Pydantic
         try:
@@ -39,12 +38,12 @@ def process_webhook_data(data: Dict[str, Any]) -> None:
             print("❌ ValidationError")
             print(e)
             raise
-
+        
         except KeyError as e:
             print("❌ KeyError DURANTE Pydantic:", e)
             print("Data completa:", data)
             raise
-
+  
         ia_name = payload.instance
         ia_phone = payload.sender.split("@")[0]
 
@@ -72,7 +71,7 @@ def process_webhook_data(data: Dict[str, Any]) -> None:
             raise Exception(f"Conteúdo da mensagem não reconhecido: {message_type=}")
 
         lead_name = webhook_data.pushName or "Usuário"
-        lead_phone = webhook_data.key.remoteJidAlt.split("@")[0]
+        lead_phone = webhook_data.key.remoteJid.split("@")[0]
 
         log.info(f"👤 Lead: {lead_name} ({lead_phone})")
         log.info(f"💬 Mensagem recebida: {mensagem_texto}")
@@ -81,6 +80,7 @@ def process_webhook_data(data: Dict[str, Any]) -> None:
         lock_key = f"webhook_processing:{lead_phone}"
     
         with DistributedLock(name=lock_key, blocking_timeout=30, ttl=15):
+            log.info(f"Processando Lead: {lead_name} ({lead_phone})")
             lead_db = _gerenciar_lead(lead_phone, lead_name, ia_infos, mensagem_texto)
             if lead_db.bloqueado:
                 log.info(f"Lead esta bloqueado no banco de dados não irei responder: {mensagem_texto}")
@@ -159,6 +159,7 @@ def _processar_conteudo(
 
 
 def _gerenciar_lead(lead_phone, lead_name, ia_infos, mensagem_texto):
+  
     """Busca ou cria Lead e mantém histórico."""
     mensagem_atual = {
         "role": "user",

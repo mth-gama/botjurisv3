@@ -23,7 +23,7 @@ log = get_logger()
 QUEUE_KEY = "queue:webhook"
 QUEUE_DLQ_KEY = "queue:webhook:dlq"   # Dead Letter Queue
 
-DEFAULT_TIMEOUT_SECONDS = 30
+DEFAULT_TIMEOUT_SECONDS = 200
 REDIS_RECONNECT_DELAY = 5  # segundos
 
 MAX_RETRIES = 5
@@ -208,7 +208,7 @@ def _extract_lead_phone(payload: Dict[str, Any]) -> Optional[str]:
     """
     try:
     
-        remote_jid = payload.get("data").get("key").get("remoteJidAlt", "user")
+        remote_jid = payload.get("data").get("key").get("remoteJid", "user")
         print("remote_jid")
         print(remote_jid)
         print("="*30)
@@ -216,6 +216,8 @@ def _extract_lead_phone(payload: Dict[str, Any]) -> Optional[str]:
     except Exception:
         return None
 
+def _serialize_wrapper(wrapper: dict) -> str:
+    return json.dumps(wrapper, ensure_ascii=False)
 
 def _handle_failure(wrapper: Dict[str, Any], error: Exception) -> None:
     """
@@ -254,10 +256,8 @@ def _handle_failure(wrapper: Dict[str, Any], error: Exception) -> None:
             internal_queue = get_internal_queue(QUEUE_KEY)
             internal_queue.add_to_dlq(wrapper, str(error))
         
-        log.error(
-            f"☠ Mensagem enviada para DLQ após {retry - 1} tentativas. "
-            f"lead_phone={lead_phone}, erro={error}"
-        )
+        print(f"☠ Mensagem enviada para DLQ após {retry - 1} tentativas.")
+        print(f"lead_phone={lead_phone}, erro={str(error)}")
         return
 
     # Calcula backoff exponencial (1, 2, 4, 8, 16, ...), limitado
@@ -278,10 +278,10 @@ def _handle_failure(wrapper: Dict[str, Any], error: Exception) -> None:
             else:
                 _use_internal_queue = True
                 internal_queue = get_internal_queue(QUEUE_KEY)
-                internal_queue.lpush(wrapper)
+                internal_queue.lpush(_serialize_wrapper(wrapper))
         else:
             internal_queue = get_internal_queue(QUEUE_KEY)
-            internal_queue.lpush(wrapper)
+            internal_queue.lpush(_serialize_wrapper(wrapper))
     except Exception as e:
         log.error(f"❌ Falha ao reenfileirar: {e}")
         # Fallback final para fila interna
@@ -299,7 +299,13 @@ def _process_item(raw: str) -> None:
       - Chama process_webhook_data com circuit breaker + timeout
       - Em caso de erro, delega para _handle_failure (retry/DLQ)
     """
-    wrapper = json.loads(raw)
+
+    try:
+        wrapper = json.loads(raw)
+    except Exception as ex:
+        print(f"Erro grave: {ex}")
+        return
+    
     payload = wrapper.get("payload", {})
 
     lead_phone = _extract_lead_phone(payload)

@@ -1,3 +1,4 @@
+import json, pysnooper
 from typing import Optional
 
 from app.core.logger_config import get_logger
@@ -25,7 +26,7 @@ def filter_lead(phone: str, message: dict) -> Optional[Lead]:
 
         historico.append(message)
         lead.message = historico
-
+ 
         db.commit()
         db.refresh(lead)
         log.info(f"Lead localizado e conversa atualizada: {lead.name} - {lead.phone}")
@@ -74,27 +75,48 @@ def update_lead(lead_id: int, message: list, resume: str) -> bool:
     finally:
         db.close()
 
+def normalize_json(value):
+    """
+    Garante que o valor é JSON-safe para Postgres JSON.
+    """
+    return json.loads(
+        json.dumps(value, ensure_ascii=False, default=str)
+    )
+
 
 def new_lead(ia_id: int, phone: str, name: str, message: list) -> Optional[Lead]:
     db = init_db()
     if not db:
+        print("Não consegui conectar com database")
         raise Exception("Não consegui conectar com database")
 
     try:
+        print(f"Iniciando salvamento do lead {phone} no database")
+        if isinstance(message, dict):
+            print("mensagem estava em dicionario colocando em lista")
+            message = [message]
+        
         lead = Lead(ia_id=ia_id, phone=phone, name=name, message=message)
-
         db.add(lead)
+
         db.commit()
+
         db.refresh(lead)
 
-        log.info(
+
+        print(
             f"Novo Lead [id: {lead.id}, Nome: {lead.name}] da IA {lead.ia_id} adicionado com sucesso!"
         )
 
         return lead
 
     except Exception as ex:
-        log.error(f"Erro ao criar novo lead: {ex}", exc_info=True)
-        return None
+        import traceback
+        print("🔥 ERRO AO COMMITAR LEAD")
+        print(f"Tipo do erro: {type(ex)}")
+        if hasattr(ex, "orig"):
+            print(f"Erro original do banco: {ex.orig}")
+        traceback.print_exc()
+        raise
     finally:
         db.close()
